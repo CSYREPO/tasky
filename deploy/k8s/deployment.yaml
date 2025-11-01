@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasky
+  labels:
+    app: tasky
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tasky
+  template:
+    metadata:
+      labels:
+        app: tasky
+    spec:
+      containers:
+      - name: tasky
+        image: <ECR_REPO_URI>:latest
+        env:
+        - name: MONGO_URI
+          value: "mongodb://mongouser:password@<MONGO_PRIVATE_IP>:27017/taskydb"
+        ports:
+        - containerPort: 8080
+

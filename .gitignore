@@ -19,6 +19,18 @@ vendor/
 .idea
 setup_test.sh
 Makefile
-deploy
 test
 tmp
+# --- Terraform artifacts (do not commit) ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+.terraform.lock.hcl
+tfplan
+
+# --- Local secrets/keys (do not commit) ---
+*.pem
+
+# --- Keep real tfvars local; commit example only ---
+deploy/terraform/terraform.tfvars

@@ -1,0 +1,8 @@
+aws_region         = "us-east-1"
+aws_account_id     = "111122223333"   # CHANGE
+key_pair_name      = "YOUR_KEYPAIR"   # CHANGE
+mongo_ami          = "ami-OLDAMI123"  # CHANGE (intentionally old)
+mongo_backup_bucket= "tasky-mongo-backups-wiz-unique-1234" # globally unique
+project            = "tasky-wiz"
+owner              = "Casey Walker"
+
