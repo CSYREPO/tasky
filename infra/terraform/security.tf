@@ -1,11 +1,10 @@
-# --- Security Groups ---
-
-# Jenkins SG: SSH + Jenkins UI exposed publicly (intentional for demo)
+# Jenkins SG: SSH + Jenkins UI
 resource "aws_security_group" "jenkins" {
   name        = "${var.project}-jenkins-sg"
   description = "Allow SSH and Jenkins UI"
   vpc_id      = aws_vpc.main.id
 
+  # SSH from anywhere (tighten later)
   ingress {
     description = "SSH"
     from_port   = 22
@@ -14,12 +13,13 @@ resource "aws_security_group" "jenkins" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Jenkins UI (now uses the variable you added in variables.tf)
   ingress {
     description = "Jenkins UI"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.jenkins_allowed_cidrs
   }
 
   egress {
@@ -31,7 +31,10 @@ resource "aws_security_group" "jenkins" {
   }
 
   tags = {
-    Name = "${var.project}-jenkins-sg"
+    Name        = "${var.project}-jenkins-sg"
+    Environment = try(var.environment, "dev")
+    Owner       = try(var.owner, "unknown")
+    ManagedBy   = try(var.managed_by, "terraform")
   }
 }
 
@@ -66,7 +69,10 @@ resource "aws_security_group" "mongo" {
   }
 
   tags = {
-    Name = "${var.project}-mongo-sg"
+    Name        = "${var.project}-mongo-sg"
+    Environment = try(var.environment, "dev")
+    Owner       = try(var.owner, "unknown")
+    ManagedBy   = try(var.managed_by, "terraform")
   }
 }
 
