@@ -11,8 +11,6 @@ pipeline {
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
 
-    KUBECTL_VERSION = "v1.30.0"
-
     JENKINS_HOME = "/var/lib/jenkins"
     TOOLS_DIR    = "/var/lib/jenkins/tools"
   }
@@ -67,23 +65,34 @@ pipeline {
       }
     }
 
+    // make sure kubectl exists and remember where it is
     stage('Ensure kubectl (user-writable)') {
       steps {
         sh """
           set -e
           mkdir -p ${TOOLS_DIR}
-          if ! command -v kubectl >/dev/null 2>&1; then
-            echo "kubectl not found, installing to ${TOOLS_DIR}..."
-            curl -L "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o ${TOOLS_DIR}/kubectl
-            chmod +x ${TOOLS_DIR}/kubectl
+
+          KUBECTL_BIN=""
+
+          if command -v kubectl >/dev/null 2>&1; then
+            # use the system one (from user_data): /usr/local/bin/kubectl
+            KUBECTL_BIN=\$(command -v kubectl)
+            echo "\$KUBECTL_BIN" > ${TOOLS_DIR}/.kubectl_path
+            echo "Using existing kubectl at \$KUBECTL_BIN"
+            \$KUBECTL_BIN version --client
           else
-            echo "kubectl already present: \$(which kubectl)"
-            kubectl version --client || true
+            # download to tools dir
+            echo "kubectl not found, downloading..."
+            curl -L "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" -o ${TOOLS_DIR}/kubectl
+            chmod +x ${TOOLS_DIR}/kubectl
+            echo "${TOOLS_DIR}/kubectl" > ${TOOLS_DIR}/.kubectl_path
+            ${TOOLS_DIR}/kubectl version --client
           fi
         """
       }
     }
 
+    // install aws cli v2 so we get modern auth
     stage('Install AWS CLI v2 (local)') {
       steps {
         sh """
@@ -91,7 +100,6 @@ pipeline {
           mkdir -p ${TOOLS_DIR}
           cd ${TOOLS_DIR}
 
-          # real aws v2 binary path after install
           AWS2_BIN="${TOOLS_DIR}/aws-cli/v2/current/bin/aws"
 
           if [ ! -x "\$AWS2_BIN" ]; then
@@ -116,18 +124,21 @@ pipeline {
           set -e
           export PATH=${TOOLS_DIR}:${TOOLS_DIR}/aws-cli/v2/current/bin:\$PATH
 
-          # use the aws v2 we just installed
+          # figure out which kubectl we decided on earlier
+          KUBECTL_BIN=\$(cat ${TOOLS_DIR}/.kubectl_path)
+          echo "Using kubectl: \$KUBECTL_BIN"
+
+          # write kubeconfig with aws v2
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION} --alias ${EKS_CLUSTER}
 
           KCFG="${JENKINS_HOME}/.kube/config"
 
-          # show auth version
           echo "---- kubeconfig auth version ----"
           grep -n "client.authentication.k8s.io" "\$KCFG" || true
           echo "---------------------------------"
 
-          # verify we can at least talk to the api (warnings ok)
-          ${TOOLS_DIR}/kubectl version --client
+          # show client
+          \$KUBECTL_BIN version --client
         """
       }
     }
@@ -138,9 +149,11 @@ pipeline {
           set -e
           export PATH=${TOOLS_DIR}:${TOOLS_DIR}/aws-cli/v2/current/bin:\$PATH
 
-          ${TOOLS_DIR}/kubectl apply -f k8s/namespace.yaml --validate=false
-          ${TOOLS_DIR}/kubectl apply -f k8s/deployment.yaml --validate=false
-          ${TOOLS_DIR}/kubectl apply -f k8s/service.yaml --validate=false
+          KUBECTL_BIN=\$(cat ${TOOLS_DIR}/.kubectl_path)
+
+          \$KUBECTL_BIN apply -f k8s/namespace.yaml --validate=false
+          \$KUBECTL_BIN apply -f k8s/deployment.yaml --validate=false
+          \$KUBECTL_BIN apply -f k8s/service.yaml --validate=false
         """
       }
     }
@@ -152,7 +165,6 @@ pipeline {
         """
       }
     }
-
   }
 
   post {
