@@ -66,37 +66,24 @@ pipeline {
       }
     }
 
-    // FIXED: make sure kubectl is a real binary, replace bad one if needed
+    // NEW: make sure kubectl is real on this node
     stage('Install/Verify kubectl') {
       steps {
-        sh '''
+        sh """
           set -e
 
-          NEED_INSTALL=false
-
-          # if kubectl missing -> install
-          if ! command -v kubectl >/dev/null 2>&1; then
-            echo "kubectl not found, will install..."
-            NEED_INSTALL=true
+          # if kubectl exists and runs, keep it
+          if command -v kubectl >/dev/null 2>&1; then
+            echo "kubectl already present: \$(which kubectl)"
+            kubectl version --client
           else
-            # sometimes /usr/local/bin/kubectl is an XML/text file from a bad URL
-            if file "$(command -v kubectl)" | grep -qi "text"; then
-              echo "Existing kubectl is not a Linux binary, will replace..."
-              NEED_INSTALL=true
-            fi
+            echo "kubectl not found, installing..."
+            curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/kubectl
+            kubectl version --client
           fi
-
-          if [ "$NEED_INSTALL" = true ]; then
-            echo "Installing kubectl from EKS S3..."
-            curl -o /usr/local/bin/kubectl \
-              https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
-            chmod +x /usr/local/bin/kubectl
-          fi
-
-          echo "kubectl is now:"
-          which kubectl
-          kubectl version --client
-        '''
+        """
       }
     }
 
@@ -107,7 +94,7 @@ pipeline {
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
           which kubectl
           kubectl version --client
-          kubectl get nodes || true
+          kubectl get nodes
         """
       }
     }
@@ -116,6 +103,7 @@ pipeline {
       steps {
         sh """
           set -e
+          # assuming your k8s/ dir is in the repo
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
@@ -127,7 +115,7 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # you could add: mongo --host ... if mongo client is installed on Jenkins
+          # optional: curl or mongo client check here
         """
       }
     }
