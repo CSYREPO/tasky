@@ -27,7 +27,7 @@ mongo --eval 'db = db.getSiblingDB("admin"); if (!db.getUser("tasky")) { db.crea
 
 # enable auth
 if ! grep -q '^security:' /etc/mongod.conf; then
-  printf "security:\\n  authorization: enabled\\n" >> /etc/mongod.conf
+  printf "security:\n  authorization: enabled\n" >> /etc/mongod.conf
 else
   sed -i 's/^  authorization: .*/  authorization: enabled/' /etc/mongod.conf
 fi
@@ -97,15 +97,18 @@ else
   echo "HTTP_HOST=0.0.0.0" >> /etc/default/jenkins
 fi
 
-# 3) kubectl (correct EKS URL)
-curl -o /usr/local/bin/kubectl https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl
+# 3) kubectl (use -L so we don't save HTML)
+curl -L -o /usr/local/bin/kubectl \
+  https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl
 chmod +x /usr/local/bin/kubectl
 
 # 4) let jenkins use docker
 usermod -aG docker jenkins
 
-# 5) install pipeline + git plugins
-jenkins-plugin-cli --plugins "workflow-aggregator git" || true
+# 5) install pipeline + git plugins (best effort, only if exists)
+if [ -x /usr/bin/jenkins-plugin-cli ]; then
+  /usr/bin/jenkins-plugin-cli --plugins "workflow-aggregator git" || true
+fi
 
 # 6) drop Groovy init scripts
 mkdir -p /var/lib/jenkins/init.groovy.d
@@ -128,25 +131,9 @@ G1
 
 cat >/var/lib/jenkins/init.groovy.d/02-create-tasky-job.groovy <<'G2'
 import jenkins.model.*
-import org.jenkinsci.plugins.workflow.job.WorkflowJob
-import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
-import hudson.plugins.git.*
 
-def j = Jenkins.get()
-def name = "tasky-wiz"
-def repo = "https://github.com/CSYREPO/tasky.git"
+Jenkins.instance.getExtensionList('hudson.model.UpdateSite')
 
-if (j.getItem(name) == null) {
-    def job = new WorkflowJob(j, name)
-    def scm = new GitSCM(repo)
-    scm.branches = [new BranchSpec("*/main")]
-    def flow = new CpsScmFlowDefinition(scm, "Jenkinsfile")
-    flow.setLightweight(true)
-    job.setDefinition(flow)
-    j.putItem(job)
-    job.scheduleBuild2(0)
-}
-j.save()
 G2
 
 chown -R jenkins:jenkins /var/lib/jenkins/init.groovy.d
