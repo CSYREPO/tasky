@@ -7,12 +7,10 @@ pipeline {
     ECR_REPO     = "122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky"
     IMAGE_TAG    = "latest"
 
-    // Mongo from TF
     MONGO_HOST   = "3.227.12.152"
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
 
-    // pin it so downloads are repeatable
     KUBECTL_VERSION = "v1.30.0"
   }
 
@@ -66,7 +64,7 @@ pipeline {
       }
     }
 
-    // FIXED: make sure kubectl is a real binary, replace bad one if needed
+    // <-- fixed stage
     stage('Install/Verify kubectl') {
       steps {
         sh '''
@@ -74,12 +72,10 @@ pipeline {
 
           NEED_INSTALL=false
 
-          # if kubectl missing -> install
           if ! command -v kubectl >/dev/null 2>&1; then
             echo "kubectl not found, will install..."
             NEED_INSTALL=true
           else
-            # sometimes /usr/local/bin/kubectl is an XML/text file from a bad URL
             if file "$(command -v kubectl)" | grep -qi "text"; then
               echo "Existing kubectl is not a Linux binary, will replace..."
               NEED_INSTALL=true
@@ -87,10 +83,12 @@ pipeline {
           fi
 
           if [ "$NEED_INSTALL" = true ]; then
-            echo "Installing kubectl from EKS S3..."
-            curl -o /usr/local/bin/kubectl \
+            echo "Downloading kubectl to workspace..."
+            curl -o kubectl \
               https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
-            chmod +x /usr/local/bin/kubectl
+            chmod +x kubectl
+            # move it into PATH with sudo
+            sudo mv kubectl /usr/local/bin/kubectl
           fi
 
           echo "kubectl is now:"
@@ -127,7 +125,6 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # you could add: mongo --host ... if mongo client is installed on Jenkins
         """
       }
     }
