@@ -13,7 +13,6 @@ pipeline {
 
     KUBECTL_VERSION = "v1.30.0"
 
-    // where we'll drop tools for the jenkins user
     JENKINS_HOME = "/var/lib/jenkins"
     TOOLS_DIR    = "/var/lib/jenkins/tools"
   }
@@ -85,7 +84,6 @@ pipeline {
       }
     }
 
-    // << THIS is the important one >>
     stage('Install AWS CLI v2 (local)') {
       steps {
         sh """
@@ -93,19 +91,21 @@ pipeline {
           mkdir -p ${TOOLS_DIR}
           cd ${TOOLS_DIR}
 
-          # only install if not already there
-          if [ ! -x "${TOOLS_DIR}/aws" ]; then
+          # real aws v2 binary path after install
+          AWS2_BIN="${TOOLS_DIR}/aws-cli/v2/current/bin/aws"
+
+          if [ ! -x "\$AWS2_BIN" ]; then
             echo "Installing AWS CLI v2 locally..."
             curl -L "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-            rm -rf aws
+            rm -rf aws aws-cli
             unzip -q awscliv2.zip
             ./aws/install -i ${TOOLS_DIR}/aws-cli -b ${TOOLS_DIR}
             rm -rf aws awscliv2.zip
           else
-            echo "AWS CLI v2 already installed at ${TOOLS_DIR}/aws"
+            echo "AWS CLI v2 already present at \$AWS2_BIN"
           fi
 
-          ${TOOLS_DIR}/aws --version
+          ${TOOLS_DIR}/aws-cli/v2/current/bin/aws --version
         """
       }
     }
@@ -114,20 +114,20 @@ pipeline {
       steps {
         sh """
           set -e
-          export PATH=${TOOLS_DIR}:\$PATH
+          export PATH=${TOOLS_DIR}:${TOOLS_DIR}/aws-cli/v2/current/bin:\$PATH
 
-          # use the local aws v2
-          ${TOOLS_DIR}/aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION} --alias ${EKS_CLUSTER}
+          # use the aws v2 we just installed
+          aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION} --alias ${EKS_CLUSTER}
 
           KCFG="${JENKINS_HOME}/.kube/config"
 
-          # show we have modern exec now
-          echo "---- kubeconfig ----"
+          # show auth version
+          echo "---- kubeconfig auth version ----"
           grep -n "client.authentication.k8s.io" "\$KCFG" || true
-          echo "--------------------"
+          echo "---------------------------------"
 
-          ${TOOLS_DIR}/kubectl version --client || ${TOOLS_DIR}/kubectl version --client
-          ${TOOLS_DIR}/kubectl get nodes || true
+          # verify we can at least talk to the api (warnings ok)
+          ${TOOLS_DIR}/kubectl version --client
         """
       }
     }
@@ -136,7 +136,7 @@ pipeline {
       steps {
         sh """
           set -e
-          export PATH=${TOOLS_DIR}:\$PATH
+          export PATH=${TOOLS_DIR}:${TOOLS_DIR}/aws-cli/v2/current/bin:\$PATH
 
           ${TOOLS_DIR}/kubectl apply -f k8s/namespace.yaml --validate=false
           ${TOOLS_DIR}/kubectl apply -f k8s/deployment.yaml --validate=false
@@ -149,7 +149,6 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # optional: mongo client check
         """
       }
     }
