@@ -7,13 +7,15 @@ pipeline {
     ECR_REPO     = "122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky"
     IMAGE_TAG    = "latest"
 
-    // Mongo bits (from TF)
     MONGO_HOST   = "3.227.12.152"
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
 
-    // keep this in sync with what we install on the box
     KUBECTL_VERSION = "v1.30.0"
+
+    // where we'll drop tools for the jenkins user
+    JENKINS_HOME = "/var/lib/jenkins"
+    TOOLS_DIR    = "/var/lib/jenkins/tools"
   }
 
   stages {
@@ -66,55 +68,66 @@ pipeline {
       }
     }
 
-    stage('Install/Verify kubectl') {
+    stage('Ensure kubectl (user-writable)') {
       steps {
         sh """
           set -e
-          if command -v kubectl >/dev/null 2>&1; then
-            echo "kubectl already present: \$(which kubectl)"
-            kubectl version --client
+          mkdir -p ${TOOLS_DIR}
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "kubectl not found, installing to ${TOOLS_DIR}..."
+            curl -L "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o ${TOOLS_DIR}/kubectl
+            chmod +x ${TOOLS_DIR}/kubectl
           else
-            echo "kubectl not found, installing..."
-            curl -L "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o kubectl
-            chmod +x kubectl
-            mkdir -p "\$HOME/bin"
-            mv kubectl "\$HOME/bin/kubectl"
-            export PATH="\$HOME/bin:\$PATH"
-            kubectl version --client
+            echo "kubectl already present: \$(which kubectl)"
+            kubectl version --client || true
           fi
         """
       }
     }
 
-    // THIS is the fixed stage
-    stage('Configure kubectl for EKS (patched)') {
+    // << THIS is the important one >>
+    stage('Install AWS CLI v2 (local)') {
       steps {
         sh """
           set -e
-          # get kubeconfig from EKS
-          aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
+          mkdir -p ${TOOLS_DIR}
+          cd ${TOOLS_DIR}
 
-          KCFG="\$HOME/.kube/config"
-          BIN_DIR="\$HOME/bin"
-          mkdir -p "\$BIN_DIR"
-
-          # download aws-iam-authenticator to a writeable dir
-          curl -L -o "\$BIN_DIR/aws-iam-authenticator" \\
-            https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/latest/download/aws-iam-authenticator_linux_amd64
-          chmod +x "\$BIN_DIR/aws-iam-authenticator"
-
-          # ensure PATH
-          export PATH="\$BIN_DIR:\$PATH"
-
-          # patch kubeconfig apiVersion + command
-          if [ -f "\$KCFG" ]; then
-            sed -i 's/client.authentication.k8s.io\\/v1alpha1/client.authentication.k8s.io\\/v1beta1/g' "\$KCFG"
-            sed -i 's/"command": "aws"/"command": "aws-iam-authenticator"/g' "\$KCFG"
+          # only install if not already there
+          if [ ! -x "${TOOLS_DIR}/aws" ]; then
+            echo "Installing AWS CLI v2 locally..."
+            curl -L "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+            rm -rf aws
+            unzip -q awscliv2.zip
+            ./aws/install -i ${TOOLS_DIR}/aws-cli -b ${TOOLS_DIR}
+            rm -rf aws awscliv2.zip
+          else
+            echo "AWS CLI v2 already installed at ${TOOLS_DIR}/aws"
           fi
 
-          # quick smoke test (may still fail if cluster not fully ready, don't kill build here)
-          kubectl version --client
-          kubectl get nodes || true
+          ${TOOLS_DIR}/aws --version
+        """
+      }
+    }
+
+    stage('Configure kubectl for EKS (with aws v2)') {
+      steps {
+        sh """
+          set -e
+          export PATH=${TOOLS_DIR}:\$PATH
+
+          # use the local aws v2
+          ${TOOLS_DIR}/aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION} --alias ${EKS_CLUSTER}
+
+          KCFG="${JENKINS_HOME}/.kube/config"
+
+          # show we have modern exec now
+          echo "---- kubeconfig ----"
+          grep -n "client.authentication.k8s.io" "\$KCFG" || true
+          echo "--------------------"
+
+          ${TOOLS_DIR}/kubectl version --client || ${TOOLS_DIR}/kubectl version --client
+          ${TOOLS_DIR}/kubectl get nodes || true
         """
       }
     }
@@ -123,10 +136,11 @@ pipeline {
       steps {
         sh """
           set -e
-          # skip strict validation in case API schema can't be fetched
-          kubectl apply -f k8s/namespace.yaml --validate=false
-          kubectl apply -f k8s/deployment.yaml --validate=false
-          kubectl apply -f k8s/service.yaml --validate=false
+          export PATH=${TOOLS_DIR}:\$PATH
+
+          ${TOOLS_DIR}/kubectl apply -f k8s/namespace.yaml --validate=false
+          ${TOOLS_DIR}/kubectl apply -f k8s/deployment.yaml --validate=false
+          ${TOOLS_DIR}/kubectl apply -f k8s/service.yaml --validate=false
         """
       }
     }
@@ -135,8 +149,7 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # if mongo client exists on the Jenkins box, you could do:
-          # mongo --host ${MONGO_HOST} -u ${MONGO_USER} -p ${MONGO_PASS} --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })' || true
+          # optional: mongo client check
         """
       }
     }
