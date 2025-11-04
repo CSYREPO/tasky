@@ -2,17 +2,20 @@ pipeline {
   agent any
 
   environment {
-    AWS_REGION   = "us-east-1"
-    EKS_CLUSTER  = "tasky-wiz-eks"
-    ECR_REPO     = "122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky"
-    IMAGE_TAG    = "latest"
+    AWS_REGION     = "us-east-1"
+    EKS_CLUSTER    = "tasky-wiz-eks"
+    ECR_REPO       = "122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky"
+    IMAGE_TAG      = "latest"
 
-    MONGO_HOST   = "3.227.12.152"
-    MONGO_USER   = "tasky"
-    MONGO_PASS   = "taskypass"
+    MONGO_HOST     = "3.227.12.152"
+    MONGO_USER     = "tasky"
+    MONGO_PASS     = "taskypass"
+
+    KUBECTL_VERSION = "v1.30.0"
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         checkout scm
@@ -22,7 +25,7 @@ pipeline {
     stage('Build image') {
       steps {
         sh """
-          sudo docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+          docker build -t ${ECR_REPO}:${IMAGE_TAG} .
         """
       }
     }
@@ -31,7 +34,7 @@ pipeline {
       steps {
         sh """
           aws ecr get-login-password --region ${AWS_REGION} \
-            | sudo docker login --username AWS --password-stdin ${ECR_REPO}
+            | docker login --username AWS --password-stdin ${ECR_REPO}
         """
       }
     }
@@ -39,7 +42,7 @@ pipeline {
     stage('Push image') {
       steps {
         sh """
-          sudo docker push ${ECR_REPO}:${IMAGE_TAG}
+          docker push ${ECR_REPO}:${IMAGE_TAG}
         """
       }
     }
@@ -63,29 +66,39 @@ pipeline {
 
     stage('Install/Verify kubectl') {
       steps {
-        sh '''
+        sh """
           set -e
-
           NEED_INSTALL=false
 
-          if ! command -v kubectl >/dev/null 2>&1; then
-            NEED_INSTALL=true
-          else
-            if file "$(command -v kubectl)" | grep -qi "text"; then
+          if command -v kubectl >/dev/null 2>&1; then
+            # make sure it’s a real binary, not HTML
+            if file \$(command -v kubectl) | grep -qi 'text'; then
+              echo "Existing kubectl is not a Linux binary, will replace..."
               NEED_INSTALL=true
+            else
+              echo "kubectl already present: \$(which kubectl)"
+              kubectl version --client
             fi
+          else
+            NEED_INSTALL=true
           fi
 
-          if [ "$NEED_INSTALL" = true ]; then
-            curl -o kubectl \
-              https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
-            chmod +x kubectl
-            sudo mv kubectl /usr/local/bin/kubectl
+          if [ "\$NEED_INSTALL" = "true" ]; then
+            echo "Installing kubectl from EKS S3..."
+            curl -L -o /tmp/kubectl https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
+            chmod +x /tmp/kubectl
+            # try to move without sudo first (if agent runs as root)
+            mv /tmp/kubectl /usr/local/bin/kubectl 2>/tmp/kubectl_mv.err || {
+              echo "could not move kubectl to /usr/local/bin, printing error:"
+              cat /tmp/kubectl_mv.err || true
+              echo "falling back to \$HOME/bin"
+              mkdir -p \$HOME/bin
+              mv /tmp/kubectl \$HOME/bin/kubectl
+              export PATH="\$HOME/bin:\$PATH"
+            }
+            kubectl version --client
           fi
-
-          which kubectl
-          kubectl version --client
-        '''
+        """
       }
     }
 
@@ -94,6 +107,8 @@ pipeline {
         sh """
           set -e
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
+          which kubectl
+          kubectl version --client
           kubectl get nodes || true
         """
       }
@@ -109,6 +124,15 @@ pipeline {
         """
       }
     }
+
+    stage('Verify Mongo from Jenkins') {
+      steps {
+        sh """
+          echo "Mongo host: ${MONGO_HOST}"
+          # this is where you could curl the app or run mongo client if installed
+        """
+      }
+    }
   }
 
   post {
@@ -117,4 +141,5 @@ pipeline {
     }
   }
 }
+
 
