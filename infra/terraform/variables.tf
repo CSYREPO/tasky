@@ -53,7 +53,7 @@ variable "key_name" {
 variable "jenkins_instance_type" {
   description = "Instance type for the Jenkins server"
   type        = string
-  default     = "t3.large"
+  default     = "t3.xlarge"
 }
 
 variable "mongo_instance_type" {
