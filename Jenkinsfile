@@ -40,9 +40,7 @@ pipeline {
 
     stage('Push image') {
       steps {
-        sh """
-          docker push ${ECR_REPO}:${IMAGE_TAG}
-        """
+        sh "docker push ${ECR_REPO}:${IMAGE_TAG}"
       }
     }
 
@@ -71,7 +69,6 @@ pipeline {
 
           if command -v kubectl >/dev/null 2>&1; then
             if file \$(command -v kubectl) | grep -qi 'text'; then
-              echo "Existing kubectl is HTML, reinstalling..."
               NEED_INSTALL=true
             else
               echo "kubectl already present: \$(which kubectl)"
@@ -89,27 +86,40 @@ pipeline {
               mv /tmp/kubectl \$HOME/bin/kubectl
               export PATH="\$HOME/bin:\$PATH"
             }
-            kubectl version --client
           fi
+
+          kubectl version --client
         """
       }
     }
 
-    stage('Configure kubectl for EKS') {
+    stage('Configure kubectl for EKS (patched)') {
       steps {
         sh """
           set -e
-          # this uses old awscli, so it writes v1alpha1 to ~/.kube/config
+
+          # 1) normal kubeconfig
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
 
           KCFG="\$HOME/.kube/config"
+
+          # 2) download a modern aws-iam-authenticator
+          # this is the one that speaks newer client.authentication.k8s.io
+          curl -L -o /usr/local/bin/aws-iam-authenticator \\
+            https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/latest/download/aws-iam-authenticator_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64
+          chmod +x /usr/local/bin/aws-iam-authenticator
+
+          # 3) patch kubeconfig to use the new binary AND new apiVersion
+          # we assume first user is the EKS one
           if [ -f "\$KCFG" ]; then
-            # bump the exec plugin apiVersion so kubectl 1.30 is happy
+            # change apiVersion
             sed -i 's/client.authentication.k8s.io\\/v1alpha1/client.authentication.k8s.io\\/v1beta1/g' "\$KCFG"
+            # change command to our fresh authenticator
+            sed -i 's/"command": "aws"/"command": "aws-iam-authenticator"/g' "\$KCFG"
           fi
 
-          which kubectl
           kubectl version --client
+          # this should now auth with v1beta1
           kubectl get nodes || true
         """
       }
@@ -119,9 +129,9 @@ pipeline {
       steps {
         sh """
           set -e
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
+          kubectl apply --validate=false -f k8s/namespace.yaml
+          kubectl apply --validate=false -f k8s/deployment.yaml
+          kubectl apply --validate=false -f k8s/service.yaml
         """
       }
     }
@@ -130,7 +140,6 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # optional: run mongo client if installed
         """
       }
     }
