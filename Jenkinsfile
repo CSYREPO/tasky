@@ -32,7 +32,7 @@ pipeline {
     stage('Login to ECR') {
       steps {
         sh """
-          aws ecr get-login-password --region ${AWS_REGION} \
+          aws ecr get-login-password --region ${AWS_REGION} \\
             | docker login --username AWS --password-stdin ${ECR_REPO}
         """
       }
@@ -63,76 +63,77 @@ pipeline {
 
     stage('Install/Verify kubectl') {
       steps {
-        sh """
+        sh '''
           set -e
           NEED_INSTALL=false
 
           if command -v kubectl >/dev/null 2>&1; then
-            if file \$(command -v kubectl) | grep -qi 'text'; then
+            if file "$(command -v kubectl)" | grep -qi text; then
               NEED_INSTALL=true
             else
-              echo "kubectl already present: \$(which kubectl)"
+              echo "kubectl already present: $(which kubectl)"
               kubectl version --client
             fi
           else
             NEED_INSTALL=true
           fi
 
-          if [ "\$NEED_INSTALL" = "true" ]; then
+          if [ "$NEED_INSTALL" = "true" ]; then
             curl -L -o /tmp/kubectl https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
             chmod +x /tmp/kubectl
-            mv /tmp/kubectl /usr/local/bin/kubectl 2>/tmp/mv.err || {
-              mkdir -p \$HOME/bin
-              mv /tmp/kubectl \$HOME/bin/kubectl
-              export PATH="\$HOME/bin:\$PATH"
-            }
+            # try system location first
+            if mv /tmp/kubectl /usr/local/bin/kubectl 2>/dev/null; then
+              echo "installed kubectl to /usr/local/bin"
+            else
+              mkdir -p "$HOME/bin"
+              mv /tmp/kubectl "$HOME/bin/kubectl"
+              echo "installed kubectl to \$HOME/bin"
+              export PATH="$HOME/bin:$PATH"
+            fi
           fi
 
           kubectl version --client
-        """
+        '''
       }
     }
 
     stage('Configure kubectl for EKS (patched)') {
       steps {
-        sh """
+        // use single quotes so Groovy doesn’t eat $()
+        sh '''
           set -e
 
           # 1) normal kubeconfig
-          aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
+          aws eks update-kubeconfig --name tasky-wiz-eks --region us-east-1
 
-          KCFG="\$HOME/.kube/config"
+          KCFG="$HOME/.kube/config"
 
-          # 2) download a modern aws-iam-authenticator
-          # this is the one that speaks newer client.authentication.k8s.io
-          curl -L -o /usr/local/bin/aws-iam-authenticator \\
-            https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/latest/download/aws-iam-authenticator_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64
+          # 2) download current aws-iam-authenticator (hardcode linux/amd64 to avoid $() in Groovy)
+          curl -L -o /usr/local/bin/aws-iam-authenticator \
+            https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/latest/download/aws-iam-authenticator_linux_amd64
           chmod +x /usr/local/bin/aws-iam-authenticator
 
-          # 3) patch kubeconfig to use the new binary AND new apiVersion
-          # we assume first user is the EKS one
-          if [ -f "\$KCFG" ]; then
-            # change apiVersion
-            sed -i 's/client.authentication.k8s.io\\/v1alpha1/client.authentication.k8s.io\\/v1beta1/g' "\$KCFG"
-            # change command to our fresh authenticator
-            sed -i 's/"command": "aws"/"command": "aws-iam-authenticator"/g' "\$KCFG"
+          # 3) patch kubeconfig
+          if [ -f "$KCFG" ]; then
+            sed -i 's/client.authentication.k8s.io\\/v1alpha1/client.authentication.k8s.io\\/v1beta1/g' "$KCFG"
+            sed -i 's/"command": "aws"/"command": "aws-iam-authenticator"/g' "$KCFG"
           fi
 
           kubectl version --client
-          # this should now auth with v1beta1
           kubectl get nodes || true
-        """
+        '''
       }
     }
 
     stage('Deploy Tasky to EKS') {
       steps {
-        sh """
+        sh '''
           set -e
+          # validation off in case schema fetch has auth hiccup
           kubectl apply --validate=false -f k8s/namespace.yaml
           kubectl apply --validate=false -f k8s/deployment.yaml
           kubectl apply --validate=false -f k8s/service.yaml
-        """
+        '''
       }
     }
 
