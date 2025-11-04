@@ -34,7 +34,7 @@ fi
 systemctl restart mongod
 sleep 5
 
-# backup script -> S3 (terraform var gets substituted in user_data)
+# backup script -> S3
 install -m 0755 -d /opt/tasky
 cat >/opt/tasky/backup-tasky.sh <<'EOS'
 #!/usr/bin/env bash
@@ -59,8 +59,13 @@ EOF
 }
 
 ###########################################################
-# Jenkins EC2
+# Jenkins EC2 (docker + awscli + real kubectl + init jobs)
 ###########################################################
+
+locals {
+  mongo_private_ip = aws_instance.mongo.private_ip
+}
+
 resource "aws_instance" "jenkins" {
   ami           = data.aws_ami.ubuntu_2004.id
   instance_type = var.jenkins_instance_type
@@ -73,72 +78,114 @@ resource "aws_instance" "jenkins" {
 
   user_data = <<EOF
 #!/bin/bash
-# log user-data so we can see errors
-exec > /var/log/user-data.log 2>&1
 set -xe
 
-# 1) base deps
+# base deps
 apt-get update -y
-apt-get install -y openjdk-17-jre curl gnupg ca-certificates docker.io awscli git
+apt-get install -y \
+  fontconfig \
+  openjdk-17-jre \
+  curl \
+  unzip \
+  apt-transport-https \
+  ca-certificates \
+  gnupg \
+  awscli
 
+# docker
+apt-get install -y docker.io
 systemctl enable docker
 systemctl restart docker
+usermod -aG docker jenkins || true
 
-# 2) Jenkins repo + install
+# REAL kubectl
+curl -L "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+chmod +x /usr/local/bin/kubectl
+file /usr/local/bin/kubectl || true
+
+# mongo client for the test script
+apt-get install -y mongodb-clients
+
+# Jenkins
 curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key -o /usr/share/keyrings/jenkins-keyring.asc
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" >/etc/apt/sources.list.d/jenkins.list
 apt-get update -y
 apt-get install -y jenkins
 
-# listen on 0.0.0.0
-if grep -q "^HTTP_HOST=" /etc/default/jenkins 2>/dev/null; then
+# listen on all interfaces
+if grep -q "^HTTP_HOST=" /etc/default/jenkins; then
   sed -i 's/^HTTP_HOST=.*/HTTP_HOST=0.0.0.0/' /etc/default/jenkins
 else
   echo "HTTP_HOST=0.0.0.0" >> /etc/default/jenkins
 fi
 
-# 3) kubectl (use -L so we don't save HTML)
-curl -L -o /usr/local/bin/kubectl \
-  https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl
-chmod +x /usr/local/bin/kubectl
+# try to preinstall pipeline/git
+/usr/bin/jenkins-plugin-cli --plugins "workflow-aggregator git" || true
 
-# 4) let jenkins use docker
-usermod -aG docker jenkins
-
-# 5) install pipeline + git plugins (best effort, only if exists)
-if [ -x /usr/bin/jenkins-plugin-cli ]; then
-  /usr/bin/jenkins-plugin-cli --plugins "workflow-aggregator git" || true
-fi
-
-# 6) drop Groovy init scripts
+# init groovy
 mkdir -p /var/lib/jenkins/init.groovy.d
 
-cat >/var/lib/jenkins/init.groovy.d/01-create-admin.groovy <<'G1'
+cat >/var/lib/jenkins/init.groovy.d/01-create-admin.groovy <<'EOG1'
 import jenkins.model.*
 import hudson.security.*
 
-def j = Jenkins.get()
+def instance = Jenkins.getInstance()
 def realm = new HudsonPrivateSecurityRealm(false)
 realm.createAccount("admin", "TaskyDemo123!")
-j.setSecurityRealm(realm)
+instance.setSecurityRealm(realm)
 
-def strat = new FullControlOnceLoggedInAuthorizationStrategy()
-strat.setAllowAnonymousRead(false)
-j.setAuthorizationStrategy(strat)
+def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+strategy.setAllowAnonymousRead(false)
+instance.setAuthorizationStrategy(strategy)
+
+instance.save()
+EOG1
+
+cat >/var/lib/jenkins/init.groovy.d/02-create-tasky-job.groovy <<'EOG2'
+import jenkins.model.*
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+import hudson.plugins.git.*
+
+def j = Jenkins.getInstance()
+def jobName    = "tasky-wiz"
+def gitRepo    = "https://github.com/CSYREPO/tasky.git"
+def branchSpec = new BranchSpec("*/main")
+def scriptPath = "Jenkinsfile"
+
+def existing = j.getItem(jobName)
+if (existing == null) {
+    println("Creating pipeline job: " + jobName)
+    def job = new WorkflowJob(j, jobName)
+
+    def scm = new GitSCM(gitRepo)
+    scm.branches = [branchSpec]
+
+    def flowDef = new CpsScmFlowDefinition(scm, scriptPath)
+    flowDef.setLightweight(true)
+
+    job.setDefinition(flowDef)
+    j.putItem(job)
+    job.scheduleBuild2(0)
+} else {
+    println("Job " + jobName + " already exists, skipping.")
+}
 
 j.save()
-G1
-
-cat >/var/lib/jenkins/init.groovy.d/02-create-tasky-job.groovy <<'G2'
-import jenkins.model.*
-
-Jenkins.instance.getExtensionList('hudson.model.UpdateSite')
-
-G2
+EOG2
 
 chown -R jenkins:jenkins /var/lib/jenkins/init.groovy.d
 
-# 7) restart Jenkins to load groovy
+# mongo test script (uses the private IP from Terraform)
+cat >/opt/test-mongo.sh <<EOS
+#!/bin/bash
+mongo --host ${local.mongo_private_ip} -u tasky -p taskypass --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })'
+EOS
+chmod +x /opt/test-mongo.sh
+
+# final services restart so jenkins picks up docker group
+usermod -aG docker jenkins || true
+systemctl restart docker
 systemctl daemon-reload
 systemctl enable jenkins
 systemctl restart jenkins
