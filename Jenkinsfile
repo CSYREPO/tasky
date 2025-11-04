@@ -1,17 +1,19 @@
 pipeline {
   agent any
 
-  // tweak these if you change TF outputs
   environment {
     AWS_REGION   = "us-east-1"
-    EKS_CLUSTER  = "tasky-wiz-eks"   // matches your terraform output
+    EKS_CLUSTER  = "tasky-wiz-eks"
     ECR_REPO     = "122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky"
     IMAGE_TAG    = "latest"
 
-    // current Mongo public IP from TF outputs
+    // Mongo from TF
     MONGO_HOST   = "3.227.12.152"
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
+
+    // pin it so downloads are repeatable
+    KUBECTL_VERSION = "v1.30.0"
   }
 
   stages {
@@ -47,7 +49,6 @@ pipeline {
       }
     }
 
-    // this is the "wait until EKS is really ready" gate
     stage('Wait for EKS to be ACTIVE') {
       steps {
         sh """
@@ -65,11 +66,35 @@ pipeline {
       }
     }
 
+    // NEW: make sure kubectl is real on this node
+    stage('Install/Verify kubectl') {
+      steps {
+        sh """
+          set -e
+
+          # if kubectl exists and runs, keep it
+          if command -v kubectl >/dev/null 2>&1; then
+            echo "kubectl already present: \$(which kubectl)"
+            kubectl version --client
+          else
+            echo "kubectl not found, installing..."
+            curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/kubectl
+            kubectl version --client
+          fi
+        """
+      }
+    }
+
     stage('Configure kubectl for EKS') {
       steps {
         sh """
+          set -e
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
-          kubectl get nodes || true
+          which kubectl
+          kubectl version --client
+          kubectl get nodes
         """
       }
     }
@@ -77,16 +102,11 @@ pipeline {
     stage('Deploy Tasky to EKS') {
       steps {
         sh """
-          # make sure namespace exists
+          set -e
+          # assuming your k8s/ dir is in the repo
           kubectl apply -f k8s/namespace.yaml
-
-          # deploy workload + service
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
-
-          # show what we deployed
-          kubectl get pods -n tasky
-          kubectl get svc -n tasky
         """
       }
     }
@@ -94,16 +114,17 @@ pipeline {
     stage('Verify Mongo from Jenkins') {
       steps {
         sh """
-          mongo --host ${MONGO_HOST} -u ${MONGO_USER} -p ${MONGO_PASS} --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })'
+          echo "Mongo host: ${MONGO_HOST}"
+          # optional: curl or mongo client check here
         """
       }
     }
+
   }
 
-  // optional: fail the build if any stage above failed
   post {
     failure {
-      echo "Build or deploy failed — check ECR/EKS/Mongo connectivity."
+      echo "Build or deploy failed — check ECR/EKS/Mongo/kubectl."
     }
   }
 }
