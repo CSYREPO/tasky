@@ -64,7 +64,7 @@ pipeline {
       }
     }
 
-    // <-- fixed stage
+    // install into the workspace and put . on PATH — no sudo
     stage('Install/Verify kubectl') {
       steps {
         sh '''
@@ -73,7 +73,7 @@ pipeline {
           NEED_INSTALL=false
 
           if ! command -v kubectl >/dev/null 2>&1; then
-            echo "kubectl not found, will install..."
+            echo "kubectl not found, will install into workspace..."
             NEED_INSTALL=true
           else
             if file "$(command -v kubectl)" | grep -qi "text"; then
@@ -83,13 +83,13 @@ pipeline {
           fi
 
           if [ "$NEED_INSTALL" = true ]; then
-            echo "Downloading kubectl to workspace..."
             curl -o kubectl \
               https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
             chmod +x kubectl
-            # move it into PATH with sudo
-            sudo mv kubectl /usr/local/bin/kubectl
           fi
+
+          # make sure current dir is on PATH for later stages
+          export PATH="$(pwd):$PATH"
 
           echo "kubectl is now:"
           which kubectl
@@ -102,6 +102,8 @@ pipeline {
       steps {
         sh """
           set -e
+          # ensure workspace is on PATH here too
+          export PATH="\$(pwd):\$PATH"
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
           which kubectl
           kubectl version --client
@@ -114,6 +116,7 @@ pipeline {
       steps {
         sh """
           set -e
+          export PATH="\$(pwd):\$PATH"
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
