@@ -10,13 +10,9 @@ pipeline {
     MONGO_HOST   = "3.227.12.152"
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
-
-    // we’ll hardcode the exact EKS path we know exists
-    KUBECTL_URL  = "https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl"
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout scm
@@ -26,7 +22,7 @@ pipeline {
     stage('Build image') {
       steps {
         sh """
-          docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+          sudo docker build -t ${ECR_REPO}:${IMAGE_TAG} .
         """
       }
     }
@@ -35,7 +31,7 @@ pipeline {
       steps {
         sh """
           aws ecr get-login-password --region ${AWS_REGION} \
-            | docker login --username AWS --password-stdin ${ECR_REPO}
+            | sudo docker login --username AWS --password-stdin ${ECR_REPO}
         """
       }
     }
@@ -43,7 +39,7 @@ pipeline {
     stage('Push image') {
       steps {
         sh """
-          docker push ${ECR_REPO}:${IMAGE_TAG}
+          sudo docker push ${ECR_REPO}:${IMAGE_TAG}
         """
       }
     }
@@ -65,39 +61,31 @@ pipeline {
       }
     }
 
-    // <-- fixed download
     stage('Install/Verify kubectl') {
       steps {
-        sh """
+        sh '''
           set -e
 
           NEED_INSTALL=false
 
           if ! command -v kubectl >/dev/null 2>&1; then
-            echo "kubectl not found, will install into workspace..."
             NEED_INSTALL=true
           else
-            if file \$(command -v kubectl) | grep -qi "text"; then
-              echo "Existing kubectl is not a Linux binary, will replace..."
+            if file "$(command -v kubectl)" | grep -qi "text"; then
               NEED_INSTALL=true
             fi
           fi
 
-          if [ "\$NEED_INSTALL" = true ]; then
-            echo "Downloading real kubectl from EKS S3..."
-            curl -L -o kubectl "${KUBECTL_URL}"
+          if [ "$NEED_INSTALL" = true ]; then
+            curl -o kubectl \
+              https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
             chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/kubectl
           fi
 
-          # make sure workspace is on PATH
-          export PATH="\$(pwd):\$PATH"
-
-          echo "kubectl is now:"
           which kubectl
-          # show file type so we know it’s a binary
-          file \$(which kubectl)
           kubectl version --client
-        """
+        '''
       }
     }
 
@@ -105,7 +93,6 @@ pipeline {
       steps {
         sh """
           set -e
-          export PATH="\$(pwd):\$PATH"
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
           kubectl get nodes || true
         """
@@ -116,22 +103,12 @@ pipeline {
       steps {
         sh """
           set -e
-          export PATH="\$(pwd):\$PATH"
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
         """
       }
     }
-
-    stage('Verify Mongo from Jenkins') {
-      steps {
-        sh """
-          echo "Mongo host: ${MONGO_HOST}"
-        """
-      }
-    }
-
   }
 
   post {
