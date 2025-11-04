@@ -15,7 +15,6 @@ pipeline {
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout scm
@@ -71,9 +70,8 @@ pipeline {
           NEED_INSTALL=false
 
           if command -v kubectl >/dev/null 2>&1; then
-            # make sure it’s a real binary, not HTML
             if file \$(command -v kubectl) | grep -qi 'text'; then
-              echo "Existing kubectl is not a Linux binary, will replace..."
+              echo "Existing kubectl is HTML, reinstalling..."
               NEED_INSTALL=true
             else
               echo "kubectl already present: \$(which kubectl)"
@@ -84,14 +82,9 @@ pipeline {
           fi
 
           if [ "\$NEED_INSTALL" = "true" ]; then
-            echo "Installing kubectl from EKS S3..."
             curl -L -o /tmp/kubectl https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
             chmod +x /tmp/kubectl
-            # try to move without sudo first (if agent runs as root)
-            mv /tmp/kubectl /usr/local/bin/kubectl 2>/tmp/kubectl_mv.err || {
-              echo "could not move kubectl to /usr/local/bin, printing error:"
-              cat /tmp/kubectl_mv.err || true
-              echo "falling back to \$HOME/bin"
+            mv /tmp/kubectl /usr/local/bin/kubectl 2>/tmp/mv.err || {
               mkdir -p \$HOME/bin
               mv /tmp/kubectl \$HOME/bin/kubectl
               export PATH="\$HOME/bin:\$PATH"
@@ -106,7 +99,15 @@ pipeline {
       steps {
         sh """
           set -e
+          # this uses old awscli, so it writes v1alpha1 to ~/.kube/config
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
+
+          KCFG="\$HOME/.kube/config"
+          if [ -f "\$KCFG" ]; then
+            # bump the exec plugin apiVersion so kubectl 1.30 is happy
+            sed -i 's/client.authentication.k8s.io\\/v1alpha1/client.authentication.k8s.io\\/v1beta1/g' "\$KCFG"
+          fi
+
           which kubectl
           kubectl version --client
           kubectl get nodes || true
@@ -129,7 +130,7 @@ pipeline {
       steps {
         sh """
           echo "Mongo host: ${MONGO_HOST}"
-          # this is where you could curl the app or run mongo client if installed
+          # optional: run mongo client if installed
         """
       }
     }
@@ -141,5 +142,4 @@ pipeline {
     }
   }
 }
-
 
