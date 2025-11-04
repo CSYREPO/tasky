@@ -36,8 +36,8 @@ resource "aws_iam_role_policy" "jenkins_inline" {
     Statement = [
       # ECR push/pull
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:CompleteLayerUpload",
@@ -50,8 +50,8 @@ resource "aws_iam_role_policy" "jenkins_inline" {
       },
       # EKS cluster describe/configure
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "eks:DescribeCluster",
           "eks:ListClusters"
         ]
@@ -59,8 +59,8 @@ resource "aws_iam_role_policy" "jenkins_inline" {
       },
       # S3 bucket for Mongo backups
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "s3:ListBucket",
           "s3:GetObject",
           "s3:PutObject"

@@ -1,50 +1,53 @@
 ###########################################################
-# MongoDB EC2 (your original, just formatted)
+# MongoDB EC2
 ###########################################################
 resource "aws_instance" "mongo" {
-  ami           = data.aws_ami.ubuntu_2004.id
-  instance_type = var.mongo_instance_type
-  # you were already using the second public subnet
+  ami                    = data.aws_ami.ubuntu_2004.id
+  instance_type          = var.mongo_instance_type
   subnet_id              = values(aws_subnet.public)[1].id
   vpc_security_group_ids = [aws_security_group.mongo.id]
   iam_instance_profile   = aws_iam_instance_profile.mongo.name
   key_name               = var.key_name
 
-  user_data = <<-EOF
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    apt-get update -y && apt-get install -y wget gnupg awscli
-    wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | apt-key add -
-    echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" > /etc/apt/sources.list.d/mongodb-org-4.4.list
-    apt-get update -y && apt-get install -y mongodb-org=4.4.29
+  user_data = <<EOF
+#!/usr/bin/env bash
+set -euxo pipefail
 
-    sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf
+apt-get update -y && apt-get install -y wget gnupg awscli
+wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | apt-key add -
+echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" > /etc/apt/sources.list.d/mongodb-org-4.4.list
+apt-get update -y && apt-get install -y mongodb-org=4.4.29
 
-    systemctl enable --now mongod
-    sleep 6
-    mongo --eval 'db = db.getSiblingDB("admin"); if (!db.getUser("tasky")) { db.createUser({user:"tasky",pwd:"taskypass",roles:[{role:"readWrite",db:"tasky"}]}) }' || true
+# listen on all interfaces
+sed -i 's/^  bindIp: .*/  bindIp: 0.0.0.0/' /etc/mongod.conf
 
-    if ! grep -q '^security:' /etc/mongod.conf; then
-      printf "security:\\n  authorization: enabled\\n" >> /etc/mongod.conf
-    else
-      sed -i 's/^  authorization: .*/  authorization: enabled/' /etc/mongod.conf
-    fi
-    systemctl restart mongod
-    sleep 5
+systemctl enable --now mongod
+sleep 6
+mongo --eval 'db = db.getSiblingDB("admin"); if (!db.getUser("tasky")) { db.createUser({user:"tasky",pwd:"taskypass",roles:[{role:"readWrite",db:"tasky"}]}) }' || true
 
-    install -m 0755 -d /opt/tasky
-    cat >/opt/tasky/backup-tasky.sh <<'EOS'
-    #!/usr/bin/env bash
-    set -euo pipefail
-    TS=$(date +%F)
-    mongodump --username tasky --password taskypass --authenticationDatabase admin --db tasky --archive | \
-      aws s3 cp - s3://MONGO_BACKUP_BUCKET/backups/tasky-$TS.archive
-    EOS
-    chmod +x /opt/tasky/backup-tasky.sh
-    sed -i "s|MONGO_BACKUP_BUCKET|${var.mongo_backup_bucket}|g" /opt/tasky/backup-tasky.sh
+# enable auth
+if ! grep -q '^security:' /etc/mongod.conf; then
+  printf "security:\\n  authorization: enabled\\n" >> /etc/mongod.conf
+else
+  sed -i 's/^  authorization: .*/  authorization: enabled/' /etc/mongod.conf
+fi
+systemctl restart mongod
+sleep 5
 
-    (crontab -l 2>/dev/null; echo "15 2 * * * /opt/tasky/backup-tasky.sh") | crontab -
-  EOF
+# backup script -> S3 (terraform var gets substituted in user_data)
+install -m 0755 -d /opt/tasky
+cat >/opt/tasky/backup-tasky.sh <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+TS=$(date +%F)
+mongodump --username tasky --password taskypass --authenticationDatabase admin --db tasky --archive | \
+  aws s3 cp - s3://MONGO_BACKUP_BUCKET/backups/tasky-$TS.archive
+EOS
+chmod +x /opt/tasky/backup-tasky.sh
+sed -i "s|MONGO_BACKUP_BUCKET|${var.mongo_backup_bucket}|g" /opt/tasky/backup-tasky.sh
+
+(crontab -l 2>/dev/null; echo "15 2 * * * /opt/tasky/backup-tasky.sh") | crontab -
+EOF
 
   tags = {
     Name        = "${var.project}-mongo"
@@ -55,67 +58,104 @@ resource "aws_instance" "mongo" {
   }
 }
 
-
 ###########################################################
-# Jenkins EC2 (codified with mongo client + test script)
+# Jenkins EC2
 ###########################################################
- 
-###########################################################
-# Jenkins EC2 (codified with mongo client + test script)
-###########################################################
-
-locals {
-  mongo_private_ip = aws_instance.mongo.private_ip
-}
-
 resource "aws_instance" "jenkins" {
-  ami                         = data.aws_ami.ubuntu_2004.id
-  instance_type               = var.jenkins_instance_type
-  key_name                    = var.key_name
-  subnet_id                   = values(aws_subnet.public)[0].id
+  ami           = data.aws_ami.ubuntu_2004.id
+  instance_type = var.jenkins_instance_type
+  key_name      = var.key_name
+  subnet_id     = values(aws_subnet.public)[0].id
+
   vpc_security_group_ids      = [aws_security_group.jenkins.id]
+  iam_instance_profile        = aws_iam_instance_profile.jenkins.name
   associate_public_ip_address = true
 
-  # <- this makes TF recreate the instance whenever user_data changes
-  user_data_replace_on_change = true
+  user_data = <<EOF
+#!/bin/bash
+# log user-data so we can see errors
+exec > /var/log/user-data.log 2>&1
+set -xe
 
-  user_data = <<-EOF
-    #!/bin/bash
-    set -xe
+# 1) base deps
+apt-get update -y
+apt-get install -y openjdk-17-jre curl gnupg ca-certificates docker.io awscli git
 
-    # update & base deps
-    apt-get update -y
-    apt-get install -y fontconfig openjdk-17-jre curl
+systemctl enable docker
+systemctl restart docker
 
-    # Jenkins repo
-    curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
-    echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+# 2) Jenkins repo + install
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key -o /usr/share/keyrings/jenkins-keyring.asc
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
+apt-get update -y
+apt-get install -y jenkins
 
-    # install Jenkins
-    apt-get update -y
-    apt-get install -y jenkins
+# listen on 0.0.0.0
+if grep -q "^HTTP_HOST=" /etc/default/jenkins 2>/dev/null; then
+  sed -i 's/^HTTP_HOST=.*/HTTP_HOST=0.0.0.0/' /etc/default/jenkins
+else
+  echo "HTTP_HOST=0.0.0.0" >> /etc/default/jenkins
+fi
 
-    # bind to all interfaces
-    if grep -q "^HTTP_HOST=" /etc/default/jenkins; then
-      sed -i 's/^HTTP_HOST=.*/HTTP_HOST=0.0.0.0/' /etc/default/jenkins
-    else
-      echo "HTTP_HOST=0.0.0.0" >> /etc/default/jenkins
-    fi
+# 3) kubectl (correct EKS URL)
+curl -o /usr/local/bin/kubectl https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl
+chmod +x /usr/local/bin/kubectl
 
-    systemctl daemon-reload
-    systemctl enable jenkins
-    systemctl restart jenkins
+# 4) let jenkins use docker
+usermod -aG docker jenkins
 
-    # install mongo client so pipelines can test DB
-    apt-get install -y mongodb-clients
+# 5) install pipeline + git plugins
+jenkins-plugin-cli --plugins "workflow-aggregator git" || true
 
-    # drop a test script that hits the Mongo EC2 over PRIVATE IP
-    cat >/opt/test-mongo.sh <<EOS
-    #!/bin/bash
-    mongo --host ${local.mongo_private_ip} -u tasky -p taskypass --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })'
-    EOS
-    chmod +x /opt/test-mongo.sh
-  EOF
+# 6) drop Groovy init scripts
+mkdir -p /var/lib/jenkins/init.groovy.d
+
+cat >/var/lib/jenkins/init.groovy.d/01-create-admin.groovy <<'G1'
+import jenkins.model.*
+import hudson.security.*
+
+def j = Jenkins.get()
+def realm = new HudsonPrivateSecurityRealm(false)
+realm.createAccount("admin", "TaskyDemo123!")
+j.setSecurityRealm(realm)
+
+def strat = new FullControlOnceLoggedInAuthorizationStrategy()
+strat.setAllowAnonymousRead(false)
+j.setAuthorizationStrategy(strat)
+
+j.save()
+G1
+
+cat >/var/lib/jenkins/init.groovy.d/02-create-tasky-job.groovy <<'G2'
+import jenkins.model.*
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+import hudson.plugins.git.*
+
+def j = Jenkins.get()
+def name = "tasky-wiz"
+def repo = "https://github.com/CSYREPO/tasky.git"
+
+if (j.getItem(name) == null) {
+    def job = new WorkflowJob(j, name)
+    def scm = new GitSCM(repo)
+    scm.branches = [new BranchSpec("*/main")]
+    def flow = new CpsScmFlowDefinition(scm, "Jenkinsfile")
+    flow.setLightweight(true)
+    job.setDefinition(flow)
+    j.putItem(job)
+    job.scheduleBuild2(0)
+}
+j.save()
+G2
+
+chown -R jenkins:jenkins /var/lib/jenkins/init.groovy.d
+
+# 7) restart Jenkins to load groovy
+systemctl daemon-reload
+systemctl enable jenkins
+systemctl restart jenkins
+EOF
 
   tags = {
     Name        = "${var.project}-jenkins"
