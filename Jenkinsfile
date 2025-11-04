@@ -11,7 +11,8 @@ pipeline {
     MONGO_USER   = "tasky"
     MONGO_PASS   = "taskypass"
 
-    KUBECTL_VERSION = "v1.30.0"
+    // we’ll hardcode the exact EKS path we know exists
+    KUBECTL_URL  = "https://amazon-eks.s3.us-west-2.amazonaws.com/1.30.0/2024-07-31/bin/linux/amd64/kubectl"
   }
 
   stages {
@@ -64,10 +65,10 @@ pipeline {
       }
     }
 
-    // install into the workspace and put . on PATH — no sudo
+    // <-- fixed download
     stage('Install/Verify kubectl') {
       steps {
-        sh '''
+        sh """
           set -e
 
           NEED_INSTALL=false
@@ -76,25 +77,27 @@ pipeline {
             echo "kubectl not found, will install into workspace..."
             NEED_INSTALL=true
           else
-            if file "$(command -v kubectl)" | grep -qi "text"; then
+            if file \$(command -v kubectl) | grep -qi "text"; then
               echo "Existing kubectl is not a Linux binary, will replace..."
               NEED_INSTALL=true
             fi
           fi
 
-          if [ "$NEED_INSTALL" = true ]; then
-            curl -o kubectl \
-              https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-07-31/bin/linux/amd64/kubectl
+          if [ "\$NEED_INSTALL" = true ]; then
+            echo "Downloading real kubectl from EKS S3..."
+            curl -L -o kubectl "${KUBECTL_URL}"
             chmod +x kubectl
           fi
 
-          # make sure current dir is on PATH for later stages
-          export PATH="$(pwd):$PATH"
+          # make sure workspace is on PATH
+          export PATH="\$(pwd):\$PATH"
 
           echo "kubectl is now:"
           which kubectl
+          # show file type so we know it’s a binary
+          file \$(which kubectl)
           kubectl version --client
-        '''
+        """
       }
     }
 
@@ -102,11 +105,8 @@ pipeline {
       steps {
         sh """
           set -e
-          # ensure workspace is on PATH here too
           export PATH="\$(pwd):\$PATH"
           aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
-          which kubectl
-          kubectl version --client
           kubectl get nodes || true
         """
       }
