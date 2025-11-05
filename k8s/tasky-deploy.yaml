@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasky-api
+  namespace: tasky
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: tasky-api
+  template:
+    metadata:
+      labels:
+        app: tasky-api
+    spec:
+      serviceAccountName: tasky-admin
+      containers:
+        - name: tasky-api
+          image: 122610499688.dkr.ecr.us-east-1.amazonaws.com/tasky:latest
+          imagePullPolicy: Always
+          # we know the app listens on 8080
+          ports:
+            - containerPort: 8080
+          env:
+            # keep all of these so the binary always gets the URI
+            - name: MONGO_URI
+              value: "mongodb://18.207.180.40:27017/tasky"
+            - name: MONGODB_URI
+              value: "mongodb://18.207.180.40:27017/tasky"
+            - name: MONGO_URL
+              value: "mongodb://18.207.180.40:27017/tasky"
+            - name: DATABASE_URL
+              value: "mongodb://18.207.180.40:27017/tasky"
+            - name: DB_URI
+              value: "mongodb://18.207.180.40:27017/tasky"
+            - name: URI
+              value: "mongodb://18.207.180.40:27017/tasky"
+          # probes should also hit 8080 now
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
