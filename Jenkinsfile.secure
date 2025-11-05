@@ -45,19 +45,19 @@ pipeline {
             }
         }
 
-        // THIS is the only part that's different from your current one 👇
         stage('Scan Image (Trivy)') {
             steps {
                 sh """
                   echo "🔎 Scanning image with Trivy (enforcing failures)..."
 
-                  if ! [ -x "./trivy" ]; then
-                    echo "Downloading Trivy locally..."
-                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ./
+                  # put trivy in /tmp so we don't fill the Jenkins workspace
+                  if [ ! -x /tmp/trivy ]; then
+                    echo "Downloading Trivy to /tmp..."
+                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /tmp
                   fi
 
-                  # exit-code 1 = fail pipeline if HIGH or CRITICAL exist
-                  ./trivy image --severity HIGH,CRITICAL --exit-code 1 ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
+                  # this will FAIL the pipeline if HIGH or CRITICAL exist
+                  /tmp/trivy image --severity HIGH,CRITICAL --exit-code 1 ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
 
                   echo "✅ Trivy scan completed and no HIGH/CRITICAL were found."
                 """
