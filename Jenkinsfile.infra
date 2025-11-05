@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION   = "us-east-1"
+        CLUSTER_NAME = "tasky-wiz-eks"
+        TF_DIR       = "infra/terraform"   // <-- your TF lives here
+        K8S_DIR      = "k8s"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh """
+                      terraform init
+                    """
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh """
+                      terraform plan -out=tfplan
+                    """
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh """
+                      terraform apply -auto-approve tfplan
+                    """
+                }
+            }
+        }
+
+        stage('Configure AWS & EKS') {
+            steps {
+                sh """
+                  aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                  kubectl get nodes
+                """
+            }
+        }
+
+        stage('Apply Kubernetes Manifests') {
+            steps {
+                sh """
+                  kubectl apply -f ${K8S_DIR}/
+                  kubectl -n tasky get pods
+                  kubectl -n tasky get svc
+                """
+            }
+        }
+    }
+}
+
