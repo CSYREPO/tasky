@@ -9,6 +9,20 @@ pipeline {
     }
 
     stages {
+        stage('Pre-Cleanup') {
+            steps {
+                echo "🧹 Cleaning up old Docker and Jenkins data..."
+                sh '''
+                  docker system prune -af || true
+                  docker image prune -af || true
+                  docker volume prune -f || true
+                  sudo rm -rf /var/lib/jenkins/workspace/* || true
+                  sudo rm -rf /tmp/* || true
+                  df -h
+                '''
+            }
+        }
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -74,6 +88,18 @@ pipeline {
                   kubectl -n tasky get svc
                 """
             }
+        }
+    }
+
+    post {
+        always {
+            echo "🧽 Final cleanup..."
+            sh '''
+              docker system prune -af || true
+              docker image prune -af || true
+              rm -rf $WORKSPACE/* || true
+              df -h
+            '''
         }
     }
 }
