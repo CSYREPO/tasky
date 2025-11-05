@@ -18,6 +18,16 @@ pipeline {
             }
         }
 
+        // optional but good for your small Jenkins EC2
+        stage('Docker Cleanup') {
+            steps {
+                sh """
+                  docker system prune -af || true
+                  docker image prune -af || true
+                """
+            }
+        }
+
         stage('Build & Push Image') {
             steps {
                 sh """
@@ -40,13 +50,16 @@ pipeline {
             steps {
                 sh """
                   echo "🔎 Scanning image with Trivy..."
-                  if ! command -v trivy >/dev/null 2>&1; then
-                    echo "Installing Trivy..."
-                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
-                    sudo mv trivy /usr/local/bin/
+
+                  # install Trivy into the current workspace if it's not already there
+                  if ! [ -x "./trivy" ]; then
+                    echo "Downloading Trivy locally..."
+                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ./
                   fi
 
-                  trivy image --severity HIGH,CRITICAL --exit-code 0 ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
+                  # run a non-blocking scan so the pipeline can continue
+                  ./trivy image --severity HIGH,CRITICAL --exit-code 0 ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
+
                   echo "✅ Trivy scan completed (non-blocking)."
                 """
             }
