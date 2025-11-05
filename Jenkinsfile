@@ -21,17 +21,33 @@ pipeline {
         stage('Build & Push Image') {
             steps {
                 sh """
-                  # login to ECR
+                  echo "🔐 Logging into ECR..."
                   aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URL}
 
-                  # build the image from your Dockerfile at repo root
+                  echo "🐳 Building image..."
                   docker build -t ${ECR_REPO}:${IMAGE_TAG} .
 
-                  # tag it for ECR
+                  echo "🏷️ Tagging image..."
                   docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
 
-                  # push to ECR
+                  echo "🚀 Pushing image to ECR..."
                   docker push ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Scan Image (Trivy)') {
+            steps {
+                sh """
+                  echo "🔎 Scanning image with Trivy..."
+                  if ! command -v trivy >/dev/null 2>&1; then
+                    echo "Installing Trivy..."
+                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+                    sudo mv trivy /usr/local/bin/
+                  fi
+
+                  trivy image --severity HIGH,CRITICAL --exit-code 0 ${ECR_URL}/${ECR_REPO}:${IMAGE_TAG}
+                  echo "✅ Trivy scan completed (non-blocking)."
                 """
             }
         }
@@ -48,10 +64,7 @@ pipeline {
         stage('Deploy to EKS') {
             steps {
                 sh """
-                  # apply the manifests you committed earlier
                   kubectl apply -f ${K8S_DIR}/
-
-                  # show status
                   kubectl -n tasky get pods
                   kubectl -n tasky get svc
                 """
