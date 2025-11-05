@@ -4,8 +4,8 @@ pipeline {
     environment {
         AWS_REGION   = "us-east-1"
         CLUSTER_NAME = "tasky-wiz-eks"
-        TF_DIR       = "infra/terraform"   // <-- your TF lives here
-        K8S_DIR      = "k8s"
+        TF_DIR       = "infra/terraform"
+        TF_IMAGE     = "hashicorp/terraform:1.9.8"
     }
 
     stages {
@@ -17,9 +17,13 @@ pipeline {
 
         stage('Terraform Init') {
             steps {
-                dir("${TF_DIR}") {
+                dir(TF_DIR) {
                     sh """
-                      terraform init
+                      docker run --rm \
+                        -v \$PWD:/workspace \
+                        -w /workspace \
+                        -v \$HOME/.aws:/root/.aws \
+                        ${TF_IMAGE} init
                     """
                 }
             }
@@ -27,9 +31,13 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
-                dir("${TF_DIR}") {
+                dir(TF_DIR) {
                     sh """
-                      terraform plan -out=tfplan
+                      docker run --rm \
+                        -v \$PWD:/workspace \
+                        -w /workspace \
+                        -v \$HOME/.aws:/root/.aws \
+                        ${TF_IMAGE} plan -out=tfplan
                     """
                 }
             }
@@ -37,9 +45,13 @@ pipeline {
 
         stage('Terraform Apply') {
             steps {
-                dir("${TF_DIR}") {
+                dir(TF_DIR) {
                     sh """
-                      terraform apply -auto-approve tfplan
+                      docker run --rm \
+                        -v \$PWD:/workspace \
+                        -w /workspace \
+                        -v \$HOME/.aws:/root/.aws \
+                        ${TF_IMAGE} apply -auto-approve tfplan
                     """
                 }
             }
@@ -57,7 +69,7 @@ pipeline {
         stage('Apply Kubernetes Manifests') {
             steps {
                 sh """
-                  kubectl apply -f ${K8S_DIR}/
+                  kubectl apply -f k8s/
                   kubectl -n tasky get pods
                   kubectl -n tasky get svc
                 """
