@@ -2,19 +2,17 @@ pipeline {
     agent any
 
     environment {
-        TF_WORKDIR = "infra/terraform"
-        TF_VARS    = "terraform.tfvars"
-        AWS_REGION = "us-east-1"
+        TF_WORKDIR          = "infra/terraform"
+        TF_VARS             = "terraform.tfvars"
+        TF_PLUGIN_CACHE_DIR = "/var/lib/jenkins/.terraform.d/plugin-cache"
+        TMPDIR              = "/var/lib/jenkins/.terraform.d/tmp"
     }
 
     stages {
         stage('Checkout') {
-            steps {
-                checkout scm
-            }
+            steps { checkout scm }
         }
 
-        // 👇 add this stage to clean Mac-specific TF stuff
         stage('Terraform Clean') {
             steps {
                 dir("${TF_WORKDIR}") {
@@ -30,6 +28,10 @@ pipeline {
             steps {
                 dir("${TF_WORKDIR}") {
                     sh '''
+                      mkdir -p ${TF_PLUGIN_CACHE_DIR}
+                      mkdir -p ${TMPDIR}
+                      export TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR}
+                      export TMPDIR=${TMPDIR}
                       terraform init -upgrade
                     '''
                 }
@@ -40,6 +42,8 @@ pipeline {
             steps {
                 dir("${TF_WORKDIR}") {
                     sh '''
+                      export TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR}
+                      export TMPDIR=${TMPDIR}
                       terraform plan -var-file=${TF_VARS} -out=tfplan.out
                     '''
                 }
@@ -51,17 +55,11 @@ pipeline {
             steps {
                 dir("${TF_WORKDIR}") {
                     sh '''
+                      export TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR}
+                      export TMPDIR=${TMPDIR}
                       terraform apply -auto-approve -var-file=${TF_VARS}
                     '''
                 }
-            }
-        }
-    }
-
-    post {
-        always {
-            dir("${TF_WORKDIR}") {
-                sh 'terraform show || true'
             }
         }
     }
