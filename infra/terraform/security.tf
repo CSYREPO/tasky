@@ -8,7 +8,6 @@ resource "aws_security_group" "jenkins" {
   description = "Allow SSH and Jenkins UI"
   vpc_id      = aws_vpc.main.id
 
-  # SSH from anywhere (tighten later)
   ingress {
     description = "SSH"
     from_port   = 22
@@ -17,7 +16,6 @@ resource "aws_security_group" "jenkins" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Jenkins UI (controlled by variable)
   ingress {
     description = "Jenkins UI"
     from_port   = 8080
@@ -42,7 +40,7 @@ resource "aws_security_group" "jenkins" {
   }
 }
 
-# Mongo SG: SSH + MongoDB exposed publicly (intentional weakness)
+# Mongo SG: SSH + MongoDB exposed publicly (intentional for exercise)
 resource "aws_security_group" "mongo" {
   name        = "${var.project}-mongo-sg"
   description = "Allow SSH and MongoDB"
@@ -53,7 +51,7 @@ resource "aws_security_group" "mongo" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # intentional for exercise
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
@@ -61,7 +59,7 @@ resource "aws_security_group" "mongo" {
     from_port   = 27017
     to_port     = 27017
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # intentional weakness
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -81,12 +79,7 @@ resource "aws_security_group" "mongo" {
 }
 
 # ------------------------------------------------------------
-# Data: current AWS account
-# ------------------------------------------------------------
-data "aws_caller_identity" "current" {}
-
-# ------------------------------------------------------------
-# Inspector 2 - account-level enable
+# Inspector2 enable (uses account ID from iam.tf)
 # ------------------------------------------------------------
 resource "aws_inspector2_enabler" "this" {
   account_ids = [data.aws_caller_identity.current.account_id]
@@ -102,7 +95,6 @@ resource "aws_inspector2_enabler" "this" {
 # VPC Flow Logs -> CloudWatch
 # ------------------------------------------------------------
 
-# CloudWatch log group to receive VPC flow logs
 resource "aws_cloudwatch_log_group" "vpc_flow" {
   name              = "/aws/vpc/${var.project}/flows"
   retention_in_days = 30
@@ -114,21 +106,19 @@ resource "aws_cloudwatch_log_group" "vpc_flow" {
   }
 }
 
-# IAM role for VPC Flow Logs to write to CloudWatch
+# IAM role for VPC flow logs to push to CW Logs
 resource "aws_iam_role" "vpc_flow_logs" {
   name = "${var.project}-vpc-flow-logs-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "vpc-flow-logs.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "vpc-flow-logs.amazonaws.com"
       }
-    ]
+      Action = "sts:AssumeRole"
+    }]
   })
 }
 
@@ -138,22 +128,19 @@ resource "aws_iam_role_policy" "vpc_flow_logs" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams"
-        ]
-        Resource = aws_cloudwatch_log_group.vpc_flow.arn
-      }
-    ]
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+      ]
+      Resource = aws_cloudwatch_log_group.vpc_flow.arn
+    }]
   })
 }
 
-# Flow log for the main VPC (defined in network.tf as aws_vpc.main)
 resource "aws_flow_log" "vpc" {
   log_destination_type = "cloud-watch-logs"
   log_group_name       = aws_cloudwatch_log_group.vpc_flow.name
