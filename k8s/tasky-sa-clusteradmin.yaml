@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: tasky-admin
+  name: tasky-sa
   namespace: tasky
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -10,9 +10,10 @@ metadata:
   name: tasky-cluster-admin
 subjects:
   - kind: ServiceAccount
-    name: tasky-admin
+    name: tasky-sa
     namespace: tasky
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
+

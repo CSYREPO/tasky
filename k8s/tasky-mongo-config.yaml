@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-config
+  namespace: tasky
+data:
+  MONGO_HOST: "10.77.1.142"
+  MONGO_PORT: "27017"
+  MONGO_DB: "tasky"
+  MONGO_URI: "mongodb://tasky:taskypass@10.77.1.142:27017/tasky?authSource=admin"
+
