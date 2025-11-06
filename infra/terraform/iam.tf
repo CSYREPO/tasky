@@ -1,45 +1,30 @@
 ############################################################
-# IAM (use existing roles created outside TF)
-# This avoids "EntityAlreadyExists" in Jenkins runs
+# IAM — roles/profiles are PRE-CREATED outside this module
+# We just leave this file here so the module has an IAM file,
+# but we don't re-declare data sources that other files already use.
 ############################################################
 
-# Who am I?
-data "aws_caller_identity" "current" {}
-
-# Allow overriding if the names ever change
-variable "jenkins_role_name" {
-  type    = string
-  default = "tasky-wiz-jenkins"
-}
-
-variable "mongo_overperm_role_name" {
-  type    = string
-  default = "tasky-wiz-mongo-overperm"
-}
-
-############################################################
-# Existing Jenkins role
-# - was previously `resource "aws_iam_role" "jenkins" {...}`
-# - now we just read it
-############################################################
-data "aws_iam_role" "jenkins" {
-  name = var.jenkins_role_name
-}
-
-# If the instance profile was also created already (very likely),
-# read it too so EC2 code can still reference it.
-data "aws_iam_instance_profile" "jenkins" {
-  name = var.jenkins_role_name
-}
-
-############################################################
-# Existing Mongo "over-permissive" role
-############################################################
-data "aws_iam_role" "mongo_overperm" {
-  name = var.mongo_overperm_role_name
-}
-
-data "aws_iam_instance_profile" "mongo" {
-  name = "${var.project}-mongo"
-}
+# Intentionally empty because:
+# - eks.tf already has:  data "aws_iam_role" "jenkins" { ... }
+# - ec2.tf already has:  data "aws_iam_instance_profile" "jenkins" { ... }
+# - ec2.tf already has:  data "aws_iam_instance_profile" "mongo" { ... }
+#
+# If later you need to attach extra policies to those existing roles,
+# you can add *resources* here that reference those data sources, e.g.:
+#
+# resource "aws_iam_role_policy" "jenkins_extra" {
+#   name = "${var.project}-jenkins-extra"
+#   role = data.aws_iam_role.jenkins.name
+#
+#   policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [{
+#       Effect   = "Allow"
+#       Action   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy"]
+#       Resource = "*"
+#     }]
+#   })
+# }
+#
+# ...but for now we keep it empty to avoid duplicate data errors.
 
