@@ -17,7 +17,12 @@ module "eks" {
   # give the TF creator admin
   enable_cluster_creator_admin_permissions = true
 
-  # let the Jenkins IAM role talk to the cluster (use EXISTING role)
+  # IMPORTANT: the log group already exists in this account from earlier runs
+  # so tell the module NOT to create it again
+  create_cloudwatch_log_group = false
+
+  # let the Jenkins IAM role talk to the cluster
+  # we are using an existing IAM role, so we refer to data.aws_iam_role.jenkins
   access_entries = {
     jenkins = {
       principal_arn     = data.aws_iam_role.jenkins.arn
@@ -37,15 +42,19 @@ module "eks" {
 }
 
 # -------------------------------------------------------------------
-# Use data sources for provider so plan doesn't depend on module outputs
+# Use data sources for the Kubernetes provider so "plan" doesn't choke
 # -------------------------------------------------------------------
-
 data "aws_eks_cluster" "this" {
   name = "${var.project}-eks"
 }
 
 data "aws_eks_cluster_auth" "this" {
   name = "${var.project}-eks"
+}
+
+# existing Jenkins role (created outside this TF or by earlier run)
+data "aws_iam_role" "jenkins" {
+  name = "${var.project}-jenkins"
 }
 
 provider "kubernetes" {
