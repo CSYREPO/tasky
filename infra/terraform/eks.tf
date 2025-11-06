@@ -18,7 +18,6 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
 
   # let the Jenkins IAM role talk to the cluster
-  # NOTE: this group name must NOT start with "system:"
   access_entries = {
     jenkins = {
       principal_arn     = aws_iam_role.jenkins.arn
@@ -37,14 +36,22 @@ module "eks" {
   }
 }
 
-# so TF itself can talk to the cluster (same as before)
+# -------------------------------------------------------------------
+# Use data sources (not module outputs) for the Kubernetes provider
+# so "terraform plan" doesn't choke
+# -------------------------------------------------------------------
+
+data "aws_eks_cluster" "this" {
+  name = "${var.project}-eks"
+}
+
 data "aws_eks_cluster_auth" "this" {
-  name = module.eks.cluster_name
+  name = "${var.project}-eks"
 }
 
 provider "kubernetes" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  host                   = data.aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
   token                  = data.aws_eks_cluster_auth.this.token
 }
 
