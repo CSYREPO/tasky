@@ -14,12 +14,24 @@ pipeline {
             }
         }
 
+        // 👇 add this stage to clean Mac-specific TF stuff
+        stage('Terraform Clean') {
+            steps {
+                dir("${TF_WORKDIR}") {
+                    sh '''
+                      rm -rf .terraform
+                      rm -f .terraform.lock.hcl
+                    '''
+                }
+            }
+        }
+
         stage('Terraform Init') {
             steps {
                 dir("${TF_WORKDIR}") {
-                    sh """
-                      terraform init
-                    """
+                    sh '''
+                      terraform init -upgrade
+                    '''
                 }
             }
         }
@@ -27,11 +39,10 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 dir("${TF_WORKDIR}") {
-                    sh """
+                    sh '''
                       terraform plan -var-file=${TF_VARS} -out=tfplan.out
-                    """
+                    '''
                 }
-                // optional: archive the plan
                 archiveArtifacts artifacts: "${TF_WORKDIR}/tfplan.out", fingerprint: true, onlyIfSuccessful: true
             }
         }
@@ -39,10 +50,9 @@ pipeline {
         stage('Terraform Apply') {
             steps {
                 dir("${TF_WORKDIR}") {
-                    // auto-approve since this is your lab
-                    sh """
+                    sh '''
                       terraform apply -auto-approve -var-file=${TF_VARS}
-                    """
+                    '''
                 }
             }
         }
