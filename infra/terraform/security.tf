@@ -81,11 +81,16 @@ resource "aws_security_group" "mongo" {
 }
 
 # ------------------------------------------------------------
+# Data: current AWS account
+# ------------------------------------------------------------
+data "aws_caller_identity" "current" {}
+
+# ------------------------------------------------------------
 # Inspector 2 - account-level enable
 # ------------------------------------------------------------
-# This turns on Inspector2 for EC2/ECR/Lambda in this account/region
 resource "aws_inspector2_enabler" "this" {
-  account_ids = ["self"]
+  account_ids = [data.aws_caller_identity.current.account_id]
+
   resource_types = [
     "EC2",
     "ECR",
@@ -115,8 +120,6 @@ resource "aws_flow_log" "vpc" {
   log_group_name       = aws_cloudwatch_log_group.vpc_flow.name
   traffic_type         = "ALL"
   vpc_id               = aws_vpc.main.id
-
-  # IAM role not needed because we use CW Logs as destination in same account
 
   tags = {
     Project     = var.project
