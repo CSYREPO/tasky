@@ -2,27 +2,12 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION   = "us-east-1"
-        CLUSTER_NAME = "tasky-wiz-eks"
-        TF_DIR       = "infra/terraform"
-        TF_IMAGE     = "hashicorp/terraform:1.9.8"
+        TF_WORKDIR = "infra/terraform"
+        TF_VARS    = "terraform.tfvars"
+        AWS_REGION = "us-east-1"
     }
 
     stages {
-        stage('Pre-Cleanup') {
-            steps {
-                echo "🧹 Cleaning up local stuff in this workspace and Docker…"
-                sh '''
-                  docker system prune -af || true
-                  docker image prune -af || true
-                  docker volume prune -f || true
-
-                  rm -rf "$WORKSPACE"/* || true
-                  df -h
-                '''
-            }
-        }
-
         stage('Checkout') {
             steps {
                 checkout scm
@@ -31,13 +16,9 @@ pipeline {
 
         stage('Terraform Init') {
             steps {
-                dir(TF_DIR) {
+                dir("${TF_WORKDIR}") {
                     sh """
-                      docker run --rm \
-                        -v \$PWD:/workspace \
-                        -w /workspace \
-                        -v \$HOME/.aws:/root/.aws \
-                        ${TF_IMAGE} init
+                      terraform init
                     """
                 }
             }
@@ -45,67 +26,32 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
-                dir(TF_DIR) {
+                dir("${TF_WORKDIR}") {
                     sh """
-                      docker run --rm \
-                        -v \$PWD:/workspace \
-                        -w /workspace \
-                        -v \$HOME/.aws:/root/.aws \
-                        ${TF_IMAGE} plan -out=tfplan
+                      terraform plan -var-file=${TF_VARS} -out=tfplan.out
                     """
                 }
+                // optional: archive the plan
+                archiveArtifacts artifacts: "${TF_WORKDIR}/tfplan.out", fingerprint: true, onlyIfSuccessful: true
             }
         }
 
         stage('Terraform Apply') {
             steps {
-                dir(TF_DIR) {
+                dir("${TF_WORKDIR}") {
+                    // auto-approve since this is your lab
                     sh """
-                      docker run --rm \
-                        -v \$PWD:/workspace \
-                        -w /workspace \
-                        -v \$HOME/.aws:/root/.aws \
-                        ${TF_IMAGE} apply -auto-approve tfplan
+                      terraform apply -auto-approve -var-file=${TF_VARS}
                     """
                 }
-            }
-        }
-
-        stage('Configure AWS & EKS') {
-            steps {
-                sh """
-                  aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-                  kubectl get nodes
-                """
-            }
-        }
-
-        stage('Apply Kubernetes Manifests') {
-            steps {
-                sh """
-                  kubectl apply -f k8s/
-                  kubectl -n tasky get pods
-                  kubectl -n tasky get svc
-                """
             }
         }
     }
 
     post {
         always {
-            echo "🧽 Final cleanup…"
-            script {
-                // only try shell if we actually have a workspace/agent
-                if (env.WORKSPACE) {
-                    sh '''
-                      docker system prune -af || true
-                      docker image prune -af || true
-                      rm -rf "$WORKSPACE"/* || true
-                      df -h
-                    '''
-                } else {
-                    echo "No workspace available (build was aborted early), skipping shell cleanup."
-                }
+            dir("${TF_WORKDIR}") {
+                sh 'terraform show || true'
             }
         }
     }
