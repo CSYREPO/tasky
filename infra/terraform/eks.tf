@@ -17,10 +17,10 @@ module "eks" {
   # give the TF creator admin
   enable_cluster_creator_admin_permissions = true
 
-  # let the Jenkins IAM role talk to the cluster
+  # let the Jenkins IAM role talk to the cluster (use EXISTING role)
   access_entries = {
     jenkins = {
-      principal_arn     = aws_iam_role.jenkins.arn
+      principal_arn     = data.aws_iam_role.jenkins.arn
       kubernetes_groups = ["jenkins-admins"]
       username          = "jenkins"
     }
@@ -37,9 +37,9 @@ module "eks" {
 }
 
 # -------------------------------------------------------------------
-# Use data sources for the Kubernetes provider
-# so "terraform plan" doesn't choke on unknown outputs
+# Use data sources for provider so plan doesn't depend on module outputs
 # -------------------------------------------------------------------
+
 data "aws_eks_cluster" "this" {
   name = "${var.project}-eks"
 }
@@ -52,5 +52,24 @@ provider "kubernetes" {
   host                   = data.aws_eks_cluster.this.endpoint
   cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
   token                  = data.aws_eks_cluster_auth.this.token
+}
+
+# RBAC: make the group we gave Jenkins ("jenkins-admins") actually admin
+resource "kubernetes_cluster_role_binding" "jenkins_admin" {
+  metadata {
+    name = "jenkins-admin"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = "cluster-admin"
+  }
+
+  subject {
+    kind      = "Group"
+    name      = "jenkins-admins" # must match access_entries group above
+    api_group = "rbac.authorization.k8s.io"
+  }
 }
 
