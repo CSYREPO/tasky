@@ -11,13 +11,13 @@ pipeline {
     stages {
         stage('Pre-Cleanup') {
             steps {
-                echo "🧹 Cleaning up old Docker and Jenkins data..."
+                echo "🧹 Cleaning up local stuff in this workspace and Docker…"
                 sh '''
                   docker system prune -af || true
                   docker image prune -af || true
                   docker volume prune -f || true
-                  sudo rm -rf /var/lib/jenkins/workspace/* || true
-                  sudo rm -rf /tmp/* || true
+
+                  rm -rf "$WORKSPACE"/* || true
                   df -h
                 '''
             }
@@ -93,13 +93,20 @@ pipeline {
 
     post {
         always {
-            echo "🧽 Final cleanup..."
-            sh '''
-              docker system prune -af || true
-              docker image prune -af || true
-              rm -rf $WORKSPACE/* || true
-              df -h
-            '''
+            echo "🧽 Final cleanup…"
+            script {
+                // only try shell if we actually have a workspace/agent
+                if (env.WORKSPACE) {
+                    sh '''
+                      docker system prune -af || true
+                      docker image prune -af || true
+                      rm -rf "$WORKSPACE"/* || true
+                      df -h
+                    '''
+                } else {
+                    echo "No workspace available (build was aborted early), skipping shell cleanup."
+                }
+            }
         }
     }
 }
