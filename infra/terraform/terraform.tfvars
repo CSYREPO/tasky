@@ -20,3 +20,7 @@ eks_node_instance_type = "t3.large"
 eks_desired_capacity   = 2
 eks_min_size           = 1
 eks_max_size           = 3
+
+# 👇 add this
+mongo_backup_bucket = "tasky-wiz-mongo-backups-fc0819"
+
